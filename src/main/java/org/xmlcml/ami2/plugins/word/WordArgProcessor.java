@@ -5,17 +5,21 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 import org.xmlcml.ami2.plugins.AMIArgProcessor;
+import org.xmlcml.ami2.plugins.AMISearcher;
 import org.xmlcml.cmine.args.ArgIterator;
 import org.xmlcml.cmine.args.ArgumentOption;
-import org.xmlcml.cmine.files.CMDir;
+import org.xmlcml.cmine.files.CTree;
 import org.xmlcml.cmine.files.ContentProcessor;
 import org.xmlcml.cmine.files.ResultsElement;
 import org.xmlcml.cmine.files.ResultsElementList;
+import org.xmlcml.cmine.lookup.DefaultStringDictionary;
 import org.xmlcml.euclid.IntRange;
 import org.xmlcml.xml.XMLUtil;
 
@@ -32,12 +36,18 @@ public class WordArgProcessor extends AMIArgProcessor {
 		LOG.setLevel(Level.DEBUG);
 	}
 	
+	public final static String FREQUENCIES = "frequencies";
 	public final static String WORD_LENGTHS = "wordLengths";
-	public final static String WORD_FREQUENCIES = "wordFrequencies";
+	public final static String WORD_FREQUENCIES = "wordFrequencies"; // deprecated
+	public final static String SEARCH = "search";					
+	public final static String WORD_SEARCH = "wordSearch";			// deprecated
 	public final static List<String> ANALYSIS_METHODS = Arrays.asList(
 		new String[]{
+				FREQUENCIES,
 				WORD_FREQUENCIES,
-				WORD_LENGTHS
+				WORD_LENGTHS,
+				SEARCH,
+				WORD_SEARCH
 		});
 	
 	public final static String ABBREVIATION = "abbreviation";
@@ -58,8 +68,6 @@ public class WordArgProcessor extends AMIArgProcessor {
 				ABBREVIATION,
 				PRESERVE
 		});
-
-	public static final String FREQUENCIES = "frequencies";
 
 	private static final String TFIDF = "tfidf";
 	private static final String TFIDF_XML = "tfidf.xml";
@@ -88,6 +96,8 @@ public class WordArgProcessor extends AMIArgProcessor {
 	WordResultsElement aggregatedFrequenciesElement;
 	private IntRange wordCount;
 	private WordResultsElement booleanFrequencyElement;
+	private Map<String, ResultsElement> resultsByDictionary;
+	
 	public WordArgProcessor() {
 		super();
 	}
@@ -143,7 +153,6 @@ public class WordArgProcessor extends AMIArgProcessor {
 	 */
 	public void parseStem(ArgumentOption option, ArgIterator argIterator) {
 		stemming = argIterator.getBoolean(option);
-		LOG.trace("Stemming not yet implemented");
 	}
 
 	public void parseStopwords(ArgumentOption option, ArgIterator argIterator) {
@@ -172,8 +181,20 @@ public class WordArgProcessor extends AMIArgProcessor {
 	}
 	
 	public void runExtractWords(ArgumentOption option) {
-		WordCollectionFactory wordCollectionFactory = new WordCollectionFactory(this);
+		ensureWordCollectionFactory();
 		wordCollectionFactory.extractWords();
+	}
+	
+	public void parseSearch(ArgumentOption option, ArgIterator argIterator) {
+		ensureSearcherList();
+		List<String> dictionarySources = argIterator.createTokenListUpToNextNonDigitMinus(option);
+		createAndAddDictionaries(dictionarySources);
+		for (DefaultStringDictionary dictionary : this.getDictionaryList()) {
+			AMISearcher wordSearcher = new WordSearcher(this, dictionary);
+			searcherList.add(wordSearcher);
+			wordSearcher.setName(dictionary.getTitle());
+		}
+//		wordSearcher.setDictionaryList(this.getDictionaryList());
 	}
 	
 	/** refactor output option.
@@ -187,8 +208,8 @@ public class WordArgProcessor extends AMIArgProcessor {
 		ResultsElementList resultsElementList = currentContentProcessor.getOrCreateResultsElementList();
 		for (int i = 0; i < resultsElementList.size(); i++) {
 			File outputDirectory = currentContentProcessor.createResultsDirectoryAndOutputResultsElement(
-					option, resultsElementList.get(i), CMDir.RESULTS_XML);
-			File htmlFile = new File(outputDirectory, CMDir.RESULTS_HTML);
+					option, resultsElementList.get(i)/*, CTree.RESULTS_XML*/);
+			File htmlFile = new File(outputDirectory, CTree.RESULTS_HTML);
 			((WordResultsElement) resultsElementList.get(i)).writeResultsElementAsHTML(htmlFile, this);
 		}
 	}
@@ -204,7 +225,7 @@ public class WordArgProcessor extends AMIArgProcessor {
 	
 	public void finalSummary(ArgumentOption option) {
 		WordResultsElementList frequenciesElementList = this.aggregateOverCMDirList(getPlugin(), WordArgProcessor.FREQUENCIES);
-		WordCollectionFactory wordCollectionFactory = new WordCollectionFactory(this);
+		ensureWordCollectionFactory();
 		for (String method : summaryMethods) {
 			runSummaryMethod(frequenciesElementList, wordCollectionFactory, method);
 		}
@@ -227,6 +248,36 @@ public class WordArgProcessor extends AMIArgProcessor {
 		}
 	}
 
+	public void runSearch(ArgumentOption option) {
+		ensureResultsByDictionary();
+		ensureSearcherList();
+		for (AMISearcher searcher : searcherList) {
+			WordSearcher wordSearcher = (WordSearcher)searcher;
+			String title = wordSearcher.getTitle();
+			ResultsElement resultsElement = wordSearcher.searchWordList();
+			resultsElement.setTitle(title);
+			resultsByDictionary.put(title, resultsElement);
+		}
+	}
+	
+	public void outputSearch(ArgumentOption option) {
+		outputResultsElements(option.getName());
+	}
+
+	private void outputResultsElements(String name) {
+		ContentProcessor currentContentProcessor = currentCTree.getOrCreateContentProcessor();
+		currentContentProcessor.clearResultsElementList();
+
+		for (String title : resultsByDictionary.keySet()) {
+			ResultsElement resultsElement = resultsByDictionary.get(title);
+			resultsElement.setTitle(title);
+			currentContentProcessor.addResultsElement(resultsElement);
+		}
+		currentContentProcessor.createResultsDirectoriesAndOutputResultsElement(name);
+	}
+	
+
+
 	private static void writeResultsElement(File outputFile, ResultsElement resultsElement) {
 		try {
 			outputFile.getParentFile().mkdirs();
@@ -238,6 +289,13 @@ public class WordArgProcessor extends AMIArgProcessor {
 	
 	// =============================
 
+	private void ensureResultsByDictionary() {
+		if (resultsByDictionary == null) {
+			resultsByDictionary = new HashMap<String, ResultsElement>();
+		}
+	}
+
+
 	private void addStopwords(List<String> stopwordLocations) {
 		ensureStopwordSetList();
 		for (String stopwordLocation : stopwordLocations) {
@@ -247,7 +305,7 @@ public class WordArgProcessor extends AMIArgProcessor {
 
 	public WordResultsElementList aggregateOverCMDirList(String pluginName, String methodName) {
 		WordResultsElementList resultsElementList = new WordResultsElementList();
-		for (CMDir cTree : cTreeList) {
+		for (CTree cTree : cTreeList) {
 			ResultsElement resultsElement = cTree.getResultsElement(pluginName, methodName);
 			if (resultsElement == null) {
 				LOG.error("Null results element, skipped "+cTree.getDirectory());
