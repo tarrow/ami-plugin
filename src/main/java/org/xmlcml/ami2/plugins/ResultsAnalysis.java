@@ -246,7 +246,7 @@ public class ResultsAnalysis implements CellCalculator {
 			cellRendererList.add(cellRenderer);
 		}
 		LOG.trace("CELL "+cellRendererList);
-		dataTablesTool.setColumnHeadingList(cellRendererList);
+		dataTablesTool.setCellRendererList(cellRendererList);
 		dataTablesTool.setRowHeadingList(this.getSortedCTreeNameList());
 		
 		HtmlTable htmlTable = dataTablesTool.createHtmlDataTable();
