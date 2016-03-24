@@ -14,7 +14,7 @@ import org.xmlcml.ami2.plugins.word.WordTest;
 import org.xmlcml.cmine.util.CMineTestFixtures;
 import org.xmlcml.norma.NormaArgProcessor;
 
-//@Ignore
+@Ignore
 public class LargeTests {
 	
 	File patentsLarge = new File("../patents/US08979");
